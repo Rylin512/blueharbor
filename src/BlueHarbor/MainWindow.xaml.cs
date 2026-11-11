@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using BlueHarbor.Models;
@@ -95,6 +96,14 @@ public partial class MainWindow : Window
         // MainViewModel.ShutdownAsync already saved settings before the
         // receiver was released. Saving again here would overwrite Armed with
         // false and break auto-arm on the next launch.
+    }
+
+    private void OutputDeviceCombo_DropDownClosed(object? sender, EventArgs e)
+    {
+        if (sender is System.Windows.Controls.ComboBox { SelectedItem: AudioOutputDevice device })
+        {
+            _viewModel.ApplyOutputDevice(device);
+        }
     }
 
     protected override void OnClosing(CancelEventArgs e)

@@ -268,40 +268,45 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public AudioOutputDevice? SelectedOutputDevice
     {
         get => _selectedOutputDevice;
-        set
+        private set => SetProperty(ref _selectedOutputDevice, value);
+    }
+
+    /// <summary>
+    /// Called only when the user closes the output-device dropdown. Keeping
+    /// this out of the SelectedItem setter prevents WPF's initial first-item
+    /// selection from silently overwriting the user's saved endpoint.
+    /// </summary>
+    public void ApplyOutputDevice(AudioOutputDevice? value)
+    {
+        if (value is null || _isLoadingOutput)
         {
-            if (!SetProperty(ref _selectedOutputDevice, value))
-            {
-                return;
-            }
+            return;
+        }
 
-            if (_isLoadingOutput || value is null)
-            {
-                return;
-            }
+        if (_selectedOutputDevice is not null &&
+            string.Equals(_selectedOutputDevice.Id, value.Id, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
 
-            _settings.OutputDeviceId = value.Id;
-            _settings.OutputDeviceName = value.Name;
-            SaveSettings();
+        SelectedOutputDevice = value;
+        _settings.OutputDeviceId = value.Id;
+        _settings.OutputDeviceName = value.Name;
+        SaveSettings();
 
-            var ok = _audioOutput.SetDefaultDevice(value.Id);
-            if (ok)
-            {
-                RepairAudibility();
-            }
-            OutputStatusText = ok
-                ? $"当前输出：{value.Name}（已设为系统默认）"
-                : $"切换失败，当前仍为：{value.Name}";
-            LastEventText = ok
-                ? $"输出设备已切换到 {value.Name}"
-                : "切换输出设备失败，请查看日志";
+        var ok = _audioOutput.SetDefaultDevice(value.Id);
+        OutputStatusText = ok
+            ? $"当前输出：{value.Name}（已设为系统默认）"
+            : $"切换失败，当前仍为：{value.Name}";
+        LastEventText = ok
+            ? $"输出设备已切换到 {value.Name}"
+            : "切换输出设备失败，请查看日志";
 
-            // Re-open the A2DP endpoint so a newly selected endpoint is used
-            // immediately instead of at the next phone reconnect.
-            if (IsArmed)
-            {
-                _ = ReconnectForOutputChangeAsync();
-            }
+        // Re-open the A2DP endpoint so a newly selected endpoint is used
+        // immediately instead of at the next phone reconnect.
+        if (IsArmed)
+        {
+            _ = ReconnectForOutputChangeAsync();
         }
     }
 
@@ -559,41 +564,33 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             _isLoadingOutput = true;
             var devices = _audioOutput.GetActiveRenderDevices();
+
+            // Follow whatever Windows currently uses. Never force a saved or
+            // preferred endpoint on startup; the user may have switched
+            // devices intentionally since the last run.
+            var selected = devices.FirstOrDefault(d => d.IsDefault) ?? devices.FirstOrDefault();
+
+            // Set the source property before the ComboBox items arrive. This
+            // prevents WPF from selecting the first item (often a stale USB
+            // headset) and then saving it as the user's preference.
+            _selectedOutputDevice = selected;
+            OnPropertyChanged(nameof(SelectedOutputDevice));
+
             OutputDevices.Clear();
             foreach (var device in devices)
             {
                 OutputDevices.Add(device);
             }
 
-            var savedId = _settings.OutputDeviceId;
-            var selected = !string.IsNullOrWhiteSpace(savedId)
-                ? OutputDevices.FirstOrDefault(d => string.Equals(d.Id, savedId, StringComparison.OrdinalIgnoreCase))
-                : null;
-            selected ??= OutputDevices.FirstOrDefault(d => d.IsDefault) ?? OutputDevices.FirstOrDefault();
-
-            if (selected is not null && !string.IsNullOrWhiteSpace(savedId) &&
-                string.Equals(selected.Id, savedId, StringComparison.OrdinalIgnoreCase) &&
-                !selected.IsDefault)
-            {
-                // The user picked this endpoint before; Windows may have moved
-                // the default to a dead USB/headphone endpoint. Put it back.
-                _audioOutput.SetDefaultDevice(selected.Id);
-                OutputStatusText = $"已自动恢复输出：{selected.Name}";
-                if (IsArmed)
-                {
-                    _ = ReconnectForOutputChangeAsync();
-                }
-            }
-            else
-            {
-                OutputStatusText = selected is null
-                    ? "未发现可用的音频输出设备"
-                    : $"当前输出：{selected.Name}";
-            }
-
+            // Re-assert after the items exist; OneWay binding now resolves to
+            // the saved endpoint instead of leaving WPF's first item visible.
             _selectedOutputDevice = selected;
             OnPropertyChanged(nameof(SelectedOutputDevice));
-            RepairAudibility();
+
+            OutputStatusText = selected is null
+                ? "未发现可用的音频输出设备"
+                : $"当前输出：{selected.Name}（由 Windows 决定）";
+
             _log.Info($"默认音频输出：{selected?.Name ?? "无"}");
         }
         catch (Exception ex)
@@ -603,23 +600,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
-            _isLoadingOutput = false;
+            // Let the ComboBox finish its own selection/layout pass while
+            // programmatic changes are still ignored.
+            Application.Current?.Dispatcher.BeginInvoke(
+                new Action(() => _isLoadingOutput = false),
+                DispatcherPriority.ApplicationIdle);
         }
-    }
-
-    private void RepairAudibility()
-    {
-        var result = _audioOutput.EnsureAudible();
-        if (!result.Changed)
-        {
-            return;
-        }
-
-        OutputStatusText = result.WasMuted
-            ? "检测到系统静音，已自动取消静音"
-            : "检测到系统音量过低，已自动提升";
-        LastEventText = $"{OutputStatusText} · {DateTime.Now:HH:mm:ss}";
-        _log.Info(OutputStatusText);
     }
 
     private async Task ReconnectForOutputChangeAsync()
@@ -755,10 +741,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var previous = LinkState;
         LinkState = status.State;
-        if (status.State == ReceiverLinkState.Connected && previous != ReceiverLinkState.Connected)
-        {
-            RepairAudibility();
-        }
         StatusTitle = status.Title;
         StatusDetail = status.Detail;
         StatusHint = status.Hint ?? string.Empty;

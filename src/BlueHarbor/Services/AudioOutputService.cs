@@ -3,7 +3,6 @@ using System.Runtime.InteropServices;
 namespace BlueHarbor.Services;
 
 public sealed record AudioOutputDevice(string Id, string Name, bool IsDefault);
-public sealed record AudioAudibilityResult(bool WasMuted, float Volume, bool Changed);
 
 /// <summary>
 /// Enumerates active render endpoints and switches the Windows default
@@ -106,56 +105,6 @@ public sealed class AudioOutputService
         {
             _log.Warn($"切换默认音频输出失败：{ex.Message}");
             return false;
-        }
-    }
-
-    /// <summary>
-    /// Windows can keep the render endpoint muted after a device switch.
-    /// A2DP then opens successfully while the user hears nothing. Repair the
-    /// mute state and lift a near-zero volume to an audible floor.
-    /// </summary>
-    public AudioAudibilityResult EnsureAudible()
-    {
-        try
-        {
-            var enumerator = (IMMDeviceEnumerator)(new MMDeviceEnumeratorComObject());
-            if (enumerator.GetDefaultAudioEndpoint(EDataFlowRender, 1, out var device) != 0)
-            {
-                return new(false, 0, false);
-            }
-
-            var iid = typeof(IAudioEndpointVolume).GUID;
-            if (device.Activate(ref iid, 1, IntPtr.Zero, out var instance) != 0 ||
-                instance is not IAudioEndpointVolume volume)
-            {
-                return new(false, 0, false);
-            }
-
-            var context = Guid.Empty;
-            volume.GetMute(out var muted);
-            volume.GetMasterVolumeLevelScalar(out var scalar);
-            var changed = false;
-
-            if (muted)
-            {
-                volume.SetMute(false, ref context);
-                changed = true;
-                _log.Warn("默认音频输出处于静音状态，已自动取消静音");
-            }
-
-            if (scalar < 0.15f)
-            {
-                volume.SetMasterVolumeLevelScalar(0.35f, ref context);
-                changed = true;
-                _log.Warn($"默认音频输出音量过低（{scalar:P0}），已提升到 35%");
-            }
-
-            return new(muted, scalar, changed);
-        }
-        catch (Exception ex)
-        {
-            _log.Warn($"检查默认音频输出音量失败：{ex.Message}");
-            return new(false, 0, false);
         }
     }
 
@@ -272,31 +221,6 @@ public sealed class AudioOutputService
         [PreserveSig] int GetValue(ref PropertyKey key, out PropVariant value);
         [PreserveSig] int SetValue(ref PropertyKey key, ref PropVariant value);
         [PreserveSig] int Commit();
-    }
-
-    [ComImport]
-    [Guid("5CDF2C82-841E-4546-9722-0CF74078229A")]
-    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-    private interface IAudioEndpointVolume
-    {
-        [PreserveSig] int RegisterControlChangeNotify(IntPtr notify);
-        [PreserveSig] int UnregisterControlChangeNotify(IntPtr notify);
-        [PreserveSig] int GetChannelCount(out int count);
-        [PreserveSig] int SetMasterVolumeLevel(float level, ref Guid context);
-        [PreserveSig] int SetMasterVolumeLevelScalar(float level, ref Guid context);
-        [PreserveSig] int GetMasterVolumeLevel(out float level);
-        [PreserveSig] int GetMasterVolumeLevelScalar(out float level);
-        [PreserveSig] int SetChannelVolumeLevel(uint channel, float level, ref Guid context);
-        [PreserveSig] int SetChannelVolumeLevelScalar(uint channel, float level, ref Guid context);
-        [PreserveSig] int GetChannelVolumeLevel(uint channel, out float level);
-        [PreserveSig] int GetChannelVolumeLevelScalar(uint channel, out float level);
-        [PreserveSig] int SetMute([MarshalAs(UnmanagedType.Bool)] bool mute, ref Guid context);
-        [PreserveSig] int GetMute([MarshalAs(UnmanagedType.Bool)] out bool mute);
-        [PreserveSig] int GetVolumeStepInfo(out uint step, out uint stepCount);
-        [PreserveSig] int VolumeStepUp(ref Guid context);
-        [PreserveSig] int VolumeStepDown(ref Guid context);
-        [PreserveSig] int QueryHardwareSupport(out uint mask);
-        [PreserveSig] int GetVolumeRange(out float min, out float max, out float increment);
     }
 
     [ComImport]
