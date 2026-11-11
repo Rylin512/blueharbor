@@ -1,0 +1,11 @@
+.tools/
+.appdata/
+.traytest*/
+dist/
+src/**/bin/
+src/**/obj/
+*.user
+*.suo
+*.log
+BlueHarbor.lnk
+diagnose-start.cmd

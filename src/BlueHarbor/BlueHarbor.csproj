@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>BlueHarbor</AssemblyName>
+    <RootNamespace>BlueHarbor</RootNamespace>
+    <ApplicationIcon>Assets\BlueHarbor.ico</ApplicationIcon>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Version>1.0.6</Version>
+    <AssemblyTitle>BlueHarbor 蓝牙音频接收器</AssemblyTitle>
+    <Product>BlueHarbor</Product>
+    <Company>BlueHarbor</Company>
+    <Description>稳定、后台常驻的 Windows 蓝牙 A2DP 音频接收器</Description>
+    <Copyright>Copyright © 2026 BlueHarbor</Copyright>
+    <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <NoWarn>$(NoWarn);CA1416;WFAC010</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Microsoft.Windows.SDK.NET">
+      <HintPath>..\..\.tools\winrt\lib\net8.0\Microsoft.Windows.SDK.NET.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+    <Reference Include="WinRT.Runtime">
+      <HintPath>..\..\.tools\winrt\lib\net8.0\WinRT.Runtime.dll</HintPath>
+      <Private>true</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <Resource Include="Assets\BlueHarbor.ico" />
+    <Resource Include="Assets\BlueHarbor.png" />
+    <Resource Include="Assets\TrayIcon.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Link="README.md" CopyToOutputDirectory="PreserveNewest" Condition="Exists('..\..\README.md')" />
+  </ItemGroup>
+
+</Project>
