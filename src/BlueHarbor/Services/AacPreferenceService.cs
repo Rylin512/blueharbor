@@ -41,6 +41,64 @@ public sealed class AacPreferenceService
         }
     }
 
+    public async Task<AacEnableResult> DisableAsync()
+    {
+        if (!IsWindows11)
+        {
+            return new(false, "AAC A2DP 需要 Windows 11 21H2 或更高版本。");
+        }
+
+        if (!IsEnabled)
+        {
+            return new(true, "当前已经是 SBC 兼容模式。");
+        }
+
+        try
+        {
+            var reg = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.System),
+                "reg.exe");
+            var args =
+                $"add \"HKLM\\{KeyPath}\" /v {ValueName} /t REG_DWORD /d 0 /f";
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = reg,
+                Arguments = args,
+                UseShellExecute = true,
+                Verb = "runas",
+                WindowStyle = ProcessWindowStyle.Hidden
+            };
+
+            using var process = Process.Start(startInfo);
+            if (process is null)
+            {
+                return new(false, "无法启动管理员权限的注册表设置进程。");
+            }
+
+            await process.WaitForExitAsync();
+            await Task.Delay(350);
+
+            if (!IsEnabled)
+            {
+                _log.Info("已回退 SBC 兼容模式（BluetoothAacEnable=0）");
+                return new(true,
+                    "已回退 SBC。请暂停/开启接收，或重新连接手机，让蓝牙栈重新协商为 SBC。");
+            }
+
+            return new(false, "设置命令已执行，但 Windows 仍在允许 AAC。");
+        }
+        catch (Win32Exception ex) when (ex.NativeErrorCode == 1223)
+        {
+            return new(false, "已取消管理员授权，仍保持 AAC 模式。");
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "回退 SBC 失败");
+            return new(false, $"回退 SBC 失败：{ex.Message}");
+        }
+    }
+
     public async Task<AacEnableResult> EnableAsync()
     {
         if (!IsWindows11)

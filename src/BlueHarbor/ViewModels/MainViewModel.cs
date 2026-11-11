@@ -24,6 +24,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly StartupService _startupService;
     private readonly PowerService _powerService;
     private readonly AacPreferenceService _aacPreference;
+    private readonly AudioOutputService _audioOutput;
     private readonly ReceiverService _receiver;
     private readonly AppSettings _settings;
     private readonly DispatcherTimer _uptimeTimer;
@@ -40,7 +41,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _startMinimized;
     private bool _isAacEnabled;
     private bool _canEnableAac;
-    private string _aacStatusText = "正在检查 AAC 优先状态…";
+    private bool _isLoadingOutput;
+    private AudioOutputDevice? _selectedOutputDevice;
+    private string _aacStatusText = "正在检查音频兼容模式…";
+    private string _outputStatusText = "正在读取默认音频输出…";
     private string _statusTitle = "接收已暂停";
     private string _statusDetail = "开启后，这台电脑会作为蓝牙音箱等待手机连接。";
     private string _statusHint = string.Empty;
@@ -50,7 +54,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private string _reconnectText = "本次会话首次连接";
     private string _lastEventText = "等待操作";
     private string _adapterText = "正在读取蓝牙适配器…";
-    private string _codecText = "AAC 优先 · 协商失败回退 SBC";
+    private string _codecText = "SBC（稳定兼容模式）";
     private string _osText = string.Empty;
     private string _appVersionText = string.Empty;
     private DateTime? _connectedAt;
@@ -65,6 +69,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         StartupService startupService,
         PowerService powerService,
         AacPreferenceService aacPreference,
+        AudioOutputService audioOutput,
         ReceiverService receiver)
     {
         _log = log;
@@ -73,6 +78,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _startupService = startupService;
         _powerService = powerService;
         _aacPreference = aacPreference;
+        _audioOutput = audioOutput;
         _receiver = receiver;
 
         _autoReconnect = settings.AutoReconnect;
@@ -91,6 +97,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         CopyDiagnosticsCommand = new RelayCommand(CopyDiagnostics);
         ShowQualityInfoCommand = new RelayCommand(ShowQualityInfo);
         EnableAacCommand = new AsyncRelayCommand(EnableAacAsync);
+        DisableAacCommand = new AsyncRelayCommand(DisableAacAsync);
         ExitCommand = new RelayCommand(() => ExitRequested?.Invoke(this, EventArgs.Empty));
 
         _receiver.DevicesChanged += OnDevicesChanged;
@@ -113,6 +120,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public event EventHandler? ExitRequested;
 
     public ObservableCollection<DeviceItemViewModel> Devices { get; } = new();
+    public ObservableCollection<AudioOutputDevice> OutputDevices { get; } = new();
 
     public AppSettings Settings => _settings;
 
@@ -124,6 +132,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand CopyDiagnosticsCommand { get; }
     public ICommand ShowQualityInfoCommand { get; }
     public ICommand EnableAacCommand { get; }
+    public ICommand DisableAacCommand { get; }
     public ICommand ExitCommand { get; }
 
     public bool IsArmed
@@ -254,6 +263,52 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         get => _aacStatusText;
         private set => SetProperty(ref _aacStatusText, value);
+    }
+
+    public AudioOutputDevice? SelectedOutputDevice
+    {
+        get => _selectedOutputDevice;
+        set
+        {
+            if (!SetProperty(ref _selectedOutputDevice, value))
+            {
+                return;
+            }
+
+            if (_isLoadingOutput || value is null)
+            {
+                return;
+            }
+
+            _settings.OutputDeviceId = value.Id;
+            _settings.OutputDeviceName = value.Name;
+            SaveSettings();
+
+            var ok = _audioOutput.SetDefaultDevice(value.Id);
+            if (ok)
+            {
+                RepairAudibility();
+            }
+            OutputStatusText = ok
+                ? $"当前输出：{value.Name}（已设为系统默认）"
+                : $"切换失败，当前仍为：{value.Name}";
+            LastEventText = ok
+                ? $"输出设备已切换到 {value.Name}"
+                : "切换输出设备失败，请查看日志";
+
+            // Re-open the A2DP endpoint so a newly selected endpoint is used
+            // immediately instead of at the next phone reconnect.
+            if (IsArmed)
+            {
+                _ = ReconnectForOutputChangeAsync();
+            }
+        }
+    }
+
+    public string OutputStatusText
+    {
+        get => _outputStatusText;
+        private set => SetProperty(ref _outputStatusText, value);
     }
 
     public string OsText
@@ -400,7 +455,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
             await LoadAdapterInfoAsync();
             LoadAacStatus();
-            await MaybePromptAacAsync();
+            LoadOutputDevices();
             _log.Info("BlueHarbor 初始化完成");
         }
         catch (Exception ex)
@@ -421,42 +476,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
         if (!_aacPreference.IsWindows11)
         {
-            AacStatusText = "当前 Windows 版本不支持 AAC A2DP（需要 Windows 11 21H2+）";
-            CodecText = "SBC（系统协商）";
+            AacStatusText = "SBC 兼容模式（当前 Windows 不支持 AAC A2DP）";
+            CodecText = "SBC（稳定兼容模式）";
         }
         else if (IsAacEnabled)
         {
-            AacStatusText = "AAC 优先已启用；Windows 在双方支持时优先 AAC，否则回退 SBC";
-            CodecText = "AAC 优先 · 失败时 SBC";
+            AacStatusText = "AAC 实验模式已开启；若连接后无声，请点“回退 SBC”";
+            CodecText = "AAC（实验）";
         }
         else
         {
-            AacStatusText = "AAC 优先尚未启用；当前可能协商为 SBC";
-            CodecText = "SBC / AAC 由 Windows 协商";
-        }
-    }
-
-    private async Task MaybePromptAacAsync()
-    {
-        if (IsAacEnabled || !_aacPreference.IsWindows11 || _settings.AacPromptShown)
-        {
-            return;
-        }
-
-        _settings.AacPromptShown = true;
-        SaveSettings();
-
-        var answer = MessageBox.Show(
-            "BlueHarbor 默认希望优先使用 AAC。\n\n" +
-            "是否现在启用 Windows 的 AAC A2DP 支持？这需要管理员权限，并会修改机器级的蓝牙设置。\n\n" +
-            "若手机或适配器不支持 AAC，Windows 会自动回退到 SBC；应用无法逐连接强制编码。",
-            "音频协议：AAC 优先",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-
-        if (answer == MessageBoxResult.Yes)
-        {
-            await EnableAacAsync();
+            AacStatusText = "SBC 兼容模式（推荐，最稳定）";
+            CodecText = "SBC（稳定兼容模式）";
         }
     }
 
@@ -467,13 +498,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        var answer = MessageBox.Show(
+            "AAC 是实验功能。部分手机/适配器会出现“显示已连接但完全没有声音”。\n\n" +
+            "BlueHarbor 默认使用 SBC，正是为了避免这个问题。只有确认你的设备兼容 AAC 时才建议开启。\n\n" +
+            "开启需要管理员权限，并会修改机器级蓝牙设置。继续？",
+            "启用 AAC（实验）",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Warning);
+        if (answer != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
         IsBusy = true;
         try
         {
             var result = await _aacPreference.EnableAsync();
             LoadAacStatus();
             LastEventText = result.Success
-                ? $"AAC 优先已启用 · {DateTime.Now:HH:mm:ss}"
+                ? $"AAC 实验模式已启用 · {DateTime.Now:HH:mm:ss}"
                 : $"AAC 设置未完成 · {DateTime.Now:HH:mm:ss}";
             MessageBox.Show(result.Message, "音频协议",
                 MessageBoxButton.OK,
@@ -482,6 +525,114 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         finally
         {
             IsBusy = false;
+        }
+    }
+
+    private async Task DisableAacAsync()
+    {
+        if (IsBusy)
+        {
+            return;
+        }
+
+        IsBusy = true;
+        try
+        {
+            var result = await _aacPreference.DisableAsync();
+            LoadAacStatus();
+            LastEventText = result.Success
+                ? $"已回退 SBC · {DateTime.Now:HH:mm:ss}"
+                : $"SBC 回退未完成 · {DateTime.Now:HH:mm:ss}";
+            MessageBox.Show(result.Message, "音频协议",
+                MessageBoxButton.OK,
+                result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    private void LoadOutputDevices()
+    {
+        try
+        {
+            _isLoadingOutput = true;
+            var devices = _audioOutput.GetActiveRenderDevices();
+            OutputDevices.Clear();
+            foreach (var device in devices)
+            {
+                OutputDevices.Add(device);
+            }
+
+            var savedId = _settings.OutputDeviceId;
+            var selected = !string.IsNullOrWhiteSpace(savedId)
+                ? OutputDevices.FirstOrDefault(d => string.Equals(d.Id, savedId, StringComparison.OrdinalIgnoreCase))
+                : null;
+            selected ??= OutputDevices.FirstOrDefault(d => d.IsDefault) ?? OutputDevices.FirstOrDefault();
+
+            if (selected is not null && !string.IsNullOrWhiteSpace(savedId) &&
+                string.Equals(selected.Id, savedId, StringComparison.OrdinalIgnoreCase) &&
+                !selected.IsDefault)
+            {
+                // The user picked this endpoint before; Windows may have moved
+                // the default to a dead USB/headphone endpoint. Put it back.
+                _audioOutput.SetDefaultDevice(selected.Id);
+                OutputStatusText = $"已自动恢复输出：{selected.Name}";
+                if (IsArmed)
+                {
+                    _ = ReconnectForOutputChangeAsync();
+                }
+            }
+            else
+            {
+                OutputStatusText = selected is null
+                    ? "未发现可用的音频输出设备"
+                    : $"当前输出：{selected.Name}";
+            }
+
+            _selectedOutputDevice = selected;
+            OnPropertyChanged(nameof(SelectedOutputDevice));
+            RepairAudibility();
+            _log.Info($"默认音频输出：{selected?.Name ?? "无"}");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"读取音频输出失败：{ex.Message}");
+            OutputStatusText = "读取音频输出失败";
+        }
+        finally
+        {
+            _isLoadingOutput = false;
+        }
+    }
+
+    private void RepairAudibility()
+    {
+        var result = _audioOutput.EnsureAudible();
+        if (!result.Changed)
+        {
+            return;
+        }
+
+        OutputStatusText = result.WasMuted
+            ? "检测到系统静音，已自动取消静音"
+            : "检测到系统音量过低，已自动提升";
+        LastEventText = $"{OutputStatusText} · {DateTime.Now:HH:mm:ss}";
+        _log.Info(OutputStatusText);
+    }
+
+    private async Task ReconnectForOutputChangeAsync()
+    {
+        try
+        {
+            await _receiver.DisarmAsync();
+            await Task.Delay(450);
+            await _receiver.ArmAsync(_settings.SelectedDeviceId, _settings.SelectedDeviceName);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"切换输出后重连接口失败：{ex.Message}");
         }
     }
 
@@ -604,6 +755,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         var previous = LinkState;
         LinkState = status.State;
+        if (status.State == ReceiverLinkState.Connected && previous != ReceiverLinkState.Connected)
+        {
+            RepairAudibility();
+        }
         StatusTitle = status.Title;
         StatusDetail = status.Detail;
         StatusHint = status.Hint ?? string.Empty;
@@ -763,10 +918,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         MessageBox.Show(
             "Windows 原生 A2DP 接收的音质由系统蓝牙栈、蓝牙适配器和手机三方协商决定：\n\n" +
             "• SBC：所有设备都支持的基线编码。\n" +
-            "• AAC：Windows 11 原生支持，手机和适配器也支持时会自动使用。\n" +
+            "• AAC：Windows 11 原生支持，但部分手机/适配器会出现“已连接但无声”，因此 BlueHarbor 默认使用 SBC；AAC 仅作为实验选项。\n" +
             "• aptX：取决于蓝牙适配器驱动，部分适配器在接收方向可用。\n" +
             "• LDAC / aptX HD：Windows 没有原生 A2DP 接收实现，应用层无法启用；需要厂商驱动或专用硬件。\n\n" +
-            "Windows 没有逐连接的编码选择 API。BlueHarbor 的“启用 AAC 优先”会打开机器级 BthA2dp BluetoothAacEnable，让 Windows 在双方支持时优先 AAC；不支持 AAC 时由 Windows 自动回退 SBC。该开关需要管理员权限，并在重新连接后生效。\n\n" +
+            "音频输出必须选对：BlueHarbor 使用 Windows 当前默认播放设备。如果默认设备是未接耳机的 USB 耳机/HDMI，手机显示已连接也不会有声音。请在“输出设备”里选择实际在用的扬声器；选择后 BlueHarbor 会把它设为系统默认并自动重连接口。\n\n" +
+            "Windows 没有逐连接的编码选择 API。SBC 是默认的稳定模式；只有在确认设备兼容时才启用 AAC 实验模式，出现无声时点“回退 SBC”。\n\n" +
             "BlueHarbor 不会重新编码或压缩音频，只负责让接收端点稳定常驻。实际编码可在手机的开发者选项 / 蓝牙音频编解码器中查看。\n\n" +
             "提升音质的实用建议：\n" +
             "1. 在 Windows 蓝牙设备属性中取消“免提电话”服务，避免 HFP 抢占。\n" +

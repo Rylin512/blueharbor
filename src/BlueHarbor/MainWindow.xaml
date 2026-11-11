@@ -194,6 +194,16 @@
                                 <TextBlock Text="编码由 Windows 蓝牙栈协商；aptX 需适配器驱动，LDAC 不原生支持。应用不重新编码。"
                                            Style="{StaticResource Muted}" TextWrapping="Wrap" Margin="0,5,0,0"
                                            LineHeight="17" />
+                                <TextBlock Text="输出设备" Style="{StaticResource Muted}" FontSize="10"
+                                           Margin="0,8,0,0" />
+                                <ComboBox ItemsSource="{Binding OutputDevices}"
+                                          SelectedItem="{Binding SelectedOutputDevice, Mode=TwoWay}"
+                                          DisplayMemberPath="Name"
+                                          Height="27" Margin="0,3,0,0" FontSize="11"
+                                          Background="#1A2433" Foreground="{StaticResource TextBrush}"
+                                          BorderBrush="#31405A" />
+                                <TextBlock Text="{Binding OutputStatusText}" Style="{StaticResource Muted}"
+                                           FontSize="10" TextWrapping="Wrap" Margin="0,3,0,0" />
                                 <Grid Margin="0,6,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
@@ -201,11 +211,16 @@
                                     </Grid.ColumnDefinitions>
                                     <TextBlock Text="{Binding AacStatusText}" Style="{StaticResource Muted}"
                                                FontSize="10" TextWrapping="Wrap" Margin="0,0,8,0" />
-                                    <Button Grid.Column="1" Content="启用 AAC 优先"
+                                    <Button Grid.Column="1" Content="启用 AAC（实验）"
                                             Command="{Binding EnableAacCommand}"
                                             Style="{StaticResource TextButton}"
                                             VerticalAlignment="Center"
                                             Visibility="{Binding CanEnableAac, Converter={StaticResource BoolToVisibility}}" />
+                                    <Button Grid.Column="1" Content="回退 SBC"
+                                            Command="{Binding DisableAacCommand}"
+                                            Style="{StaticResource TextButton}"
+                                            VerticalAlignment="Center"
+                                            Visibility="{Binding IsAacEnabled, Converter={StaticResource BoolToVisibility}}" />
                                 </Grid>
                             </StackPanel>
                         </Border>

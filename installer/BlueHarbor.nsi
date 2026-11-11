@@ -4,7 +4,7 @@ Unicode true
 !include "LogicLib.nsh"
 
 !define APP_NAME "BlueHarbor"
-!define APP_VERSION "1.0.6"
+!define APP_VERSION "1.0.7"
 !define APP_PUBLISHER "BlueHarbor"
 !define APP_EXE "BlueHarbor.exe"
 !define APP_ID "BlueHarbor"

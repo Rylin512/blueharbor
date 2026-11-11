@@ -9,3 +9,5 @@ src/**/obj/
 *.log
 BlueHarbor.lnk
 diagnose-start.cmd
+
+screen-*.png

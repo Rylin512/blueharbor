@@ -60,6 +60,7 @@ public partial class App : Application
             var startupService = new StartupService(_logger);
             var powerService = new PowerService(_logger);
             var aacPreference = new AacPreferenceService(_logger);
+            var audioOutput = new AudioOutputService(_logger);
             var receiver = new ReceiverService(_logger, Dispatcher)
             {
                 ResetFirstConnectionOnStart = !wasCleanShutdown
@@ -72,6 +73,7 @@ public partial class App : Application
                 startupService,
                 powerService,
                 aacPreference,
+                audioOutput,
                 receiver);
             _mainWindow = new MainWindow(_viewModel, _logger, settings);
             MainWindow = _mainWindow;

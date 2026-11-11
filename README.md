@@ -54,6 +54,8 @@ Windows 没有把“我的电脑作为蓝牙音箱”做成一个显眼的系统
 | 退出清理 | 退出时先释放 A2DP 端点并等待蓝牙栈拆除，减少下次首连无声 |
 | 首连自愈 | 上次异常退出或从旧版本升级时，首次连接会重新挂接一次端点 |
 | 托盘图标 | 多尺寸图标 + 原生 `Shell_NotifyIcon` + WinForms 回退；Explorer 重启后自动恢复 |
+| 自动修复无声 | 连接时检查默认输出是否静音/音量过低，自动取消静音并恢复可听音量 |
+| 输出设备守护 | 记住用户选择的播放端点，启动时自动恢复，避免默认设备漂移到未使用的耳机/HDMI |
 | 睡眠抑制 | 连接期间阻止系统空闲睡眠（可关闭） |
 | 开机启动 | 登录后直接在托盘待命（可关闭） |
 | 单实例 | 避免两个进程同时争抢同一个 A2DP 接收端 |
@@ -101,7 +103,7 @@ flowchart LR
 从 [Releases](https://github.com/Rylin512/blueharbor/releases) 下载：
 
 ```text
-BlueHarbor-Setup-1.0.6.exe
+BlueHarbor-Setup-1.0.7.exe
 ```
 
 双击安装，默认安装到 `%LOCALAPPDATA%\Programs\BlueHarbor`。安装包未签名，SmartScreen 可能提示；选择“更多信息 → 仍要运行”。
@@ -110,7 +112,7 @@ BlueHarbor-Setup-1.0.6.exe
 
 ### 方式二：便携包
 
-下载 `BlueHarbor-Portable-1.0.6.zip`，**完整解压到普通用户目录**（桌面、文档等，不要放在 `Program Files`），然后：
+下载 `BlueHarbor-Portable-1.0.7.zip`，**完整解压到普通用户目录**（桌面、文档等，不要放在 `Program Files`），然后：
 
 - 直接运行 `app\BlueHarbor.exe`；或
 - 双击 `Install.cmd` 安装到当前用户目录。
@@ -151,37 +153,41 @@ Windows 原生 A2DP 接收的编码由系统蓝牙栈决定：
 | 编码 | Windows 原生 A2DP 接收 | 说明 |
 |---|---|---|
 | SBC | 支持 | 强制基线，所有设备都支持 |
-| AAC | Windows 11 原生支持 | 1.0.6 默认引导开启 AAC 优先；双方支持时优先 AAC |
+| AAC | Windows 11 原生支持 | 实验选项；部分设备会出现“已连接但无声”，1.0.7 默认不启用 |
 | aptX | 取决于适配器驱动 | 部分适配器在接收方向开放 |
 | aptX HD / Adaptive | 否（原生） | 需要厂商驱动或专用硬件 |
 | LDAC | 否（原生） | 应用层无法启用，需要驱动或专用硬件 |
 
 BlueHarbor 不重新编码，也不会降低系统选定的质量。想确认当前编码，可以查看手机开发者选项中的“蓝牙音频编解码器”；Windows 端不提供统一的 A2DP Sink 编码查询 API。
 
-### AAC 优先
+### 稳定优先：默认 SBC
 
-Windows 没有“逐连接选择编码”的公开 API，也没有 A2DP Sink 的编码下拉框。BlueHarbor 1.0.6 采用 Windows 官方驱动文档中的机器级开关：
+1.0.7 **默认使用 SBC**，不再自动启用 AAC。原因是部分手机/适配器在 A2DP Sink 方向协商 AAC 后会进入“显示已连接、端点 Opened，但完全没有声音”的状态；重连也不能恢复，必须回退 SBC。
 
-```text
-HKLM\SYSTEM\CurrentControlSet\Services\BthA2dp\Parameters
-  BluetoothAacEnable = 1
-```
+主界面仍保留“启用 AAC（实验）”入口，便于确认设备兼容性：
 
-效果：
+- 开启需要管理员权限，写入机器级 `BthA2dp\BluetoothAacEnable=1`；
+- 出现无声时点“回退 SBC”，会写回 `0` 并重新连接；
+- Windows 没有逐连接选择编码的公开 API，最终编码仍由手机、适配器和 Windows 协商；
+- 不能保证每台设备都能稳定使用 AAC。
 
-- Windows 允许 AAC 后，编码优先级为 **AAC 高于 SBC**；
-- 手机和适配器都支持 AAC 时，优先协商 AAC；
-- 任何一方不支持 AAC 时，Windows 自动回退到 SBC；
-- 该开关是机器级设置，需要管理员权限，重新连接手机后生效。
+### 输出设备
 
-应用内的“启用 AAC 优先”按钮会通过 UAC 写入该值；首次启动也会询问一次。**应用无法逐连接强制编码**：最终结果仍由手机、适配器和 Windows 蓝牙栈协商决定。如果日志/手机显示仍为 SBC，说明当前链路没有成功协商 AAC，而不是应用回退。
+`AudioPlaybackConnection` 始终把手机音频送到 **Windows 当前默认播放设备**。如果默认设备是未插耳机的 USB 耳机、HDMI 显示器或虚拟声卡，手机端会显示已连接，但人听不到声音。
 
-> 截至 Windows 11，AAC 是原生支持的接收编码；LDAC/aptX HD 需要驱动或专用硬件。应用层不能把 SBC 强制变成 LDAC。
+1.0.7 在“音质路径”卡片增加“输出设备”选择器：
 
-提升音质的实用建议：
+- 列出当前活动的播放端点；
+- 选中后立即设为 Windows 默认播放设备；
+- 记住选择，下次启动自动恢复，避免 USB/蓝牙设备插拔后默认设备漂移；
+- 切换后自动重新挂接 A2DP 端点，不需要手动暂停/开启。
+
+如果仍然无声，先确认输出设备不是耳机/HDMI，再尝试“回退 SBC”。
+
+提升稳定性的实用建议：
 
 1. 在 Windows 蓝牙设备属性中取消“免提电话”服务，避免 HFP 抢占 A2DP；
-2. 使用支持 AAC 的手机与适配器；
+2. 优先使用 SBC 兼容模式；AAC 只作为实验选项；
 3. 关闭系统音效、空间音频等二次处理；
 4. 如果必须使用 LDAC/aptX HD，需要换支持接收方向的适配器/驱动，或改用 Wi-Fi/USB 高音质链路。
 
@@ -209,7 +215,7 @@ Connected → Reconnecting → Connected
 
 ### 启动耗时
 
-1.0.6 使用文件夹部署，启动时不再把 74MB 单文件解压到临时目录；日志会记录：
+1.0.7 使用文件夹部署，启动时不再把 74MB 单文件解压到临时目录；日志会记录：
 
 ```text
 启动完成，进程启动至今 1234 ms
@@ -262,6 +268,8 @@ BlueHarbor/
 │   │   ├── ReceiverService.cs          A2DP 状态机与看门狗
 │   │   ├── NativeTrayIcon.cs           Shell_NotifyIcon + GUID
 │   │   ├── TrayIconService.cs          托盘菜单与 WinForms 回退
+│   │   ├── AudioOutputService.cs       播放端点枚举与默认设备切换
+│   │   ├── AacPreferenceService.cs     SBC/AAC 兼容开关
 │   │   ├── Logger.cs                   滚动日志
 │   │   ├── SettingsService.cs          JSON 设置
 │   │   ├── StartupService.cs           HKCU 开机启动
@@ -322,7 +330,7 @@ powershell -ExecutionPolicy Bypass -File scripts/build.ps1
 1. 检查/下载 WinRT 投影；
 2. 发布自包含文件夹到 `dist/app`；
 3. 复制 README、LICENSE、截图；
-4. 如果找到 `makensis`，生成 `dist/BlueHarbor-Setup-1.0.6.exe`。
+4. 如果找到 `makensis`，生成 `dist/BlueHarbor-Setup-1.0.7.exe`。
 
 ### 生成安装包
 
@@ -334,8 +342,8 @@ makensis installer/BlueHarbor.nsi
 
 发布资产：
 
-- `BlueHarbor-Setup-1.0.6.exe`：NSIS 安装包，按用户安装；
-- `BlueHarbor-Portable-1.0.6.zip`：解压即用，内含 `Install.cmd`；
+- `BlueHarbor-Setup-1.0.7.exe`：NSIS 安装包，按用户安装；
+- `BlueHarbor-Portable-1.0.7.zip`：解压即用，内含 `Install.cmd`；
 - `SHA256SUMS.txt`：校验值。
 
 安装包未做代码签名。SmartScreen 拦截并不代表程序有问题；如果没有代码签名证书，无法从应用层消除该提示。安装器打不开时优先使用 ZIP 里的 `Install.cmd`。
@@ -368,15 +376,16 @@ Shell_NotifyIcon ...
 
 1. 点击任务栏的 `^`，查看隐藏图标里是否有 BlueHarbor；有就拖到任务栏固定。
 2. 如果日志出现 `Shell_NotifyIcon ... 失败`，通常是程序在受限桌面/沙盒中运行；请从 Windows 资源管理器直接启动 exe，而不是从压缩包预览或下载工具临时目录启动。
-3. 1.0.6 会在 Explorer 重启后自动重建图标，并尝试修复 `NotifyIconSettings` 中指向旧 exe 的条目。
+3. 1.0.7 会在 Explorer 重启后自动重建图标，并尝试修复 `NotifyIconSettings` 中指向旧 exe 的条目。
 
-### 第一次连接没有声音，第二次又正常
+### 连接成功但完全没有声音
 
-这是 A2DP 端点遗留路由问题。1.0.6 的处理：
+按以下顺序排查：
 
-- 正常退出时等待端点释放；
-- 上次异常退出/旧版本升级时，首次连接重新挂接一次端点；
-- 重连后如果仍无声，检查日志是否连续出现 `Opened`；把日志发到 Issues 时附带手机型号、Windows 版本和是否使用过旧版本。
+1. **输出设备**：主界面“输出设备”选择器里是否选中了实际在用的扬声器。默认设备如果是没插耳机的 USB 耳机、HDMI 或虚拟声卡，手机显示已连接也不会有声音。
+2. **系统静音/音量**：1.0.7 在连接时和启动时会自动取消默认输出的静音，并在音量低于 15% 时提升到 35%；但如果你手动把音量调得很低，仍可能听不到。
+3. **AAC 实验模式**：如果曾开启 AAC，点“回退 SBC”。部分设备协商 AAC 后会“Opened 但无声”，重连无效。
+4. **端点路由**：正常退出会等待端点释放；异常退出后的首次连接会自动重新挂接。仍无声时，把日志发到 Issues，附手机型号、Windows 版本、输出设备名和是否使用过 AAC。
 
 ### 安装器提示“无法打开文件”
 

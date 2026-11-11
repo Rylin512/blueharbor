@@ -57,4 +57,4 @@ if (-not $SkipInstaller) {
     & $makensis "installer\BlueHarbor.nsi"
 }
 
-Write-Host "Done. Output: dist\app and dist\BlueHarbor-Setup-1.0.6.exe"
+Write-Host "Done. Output: dist\app and dist\BlueHarbor-Setup-1.0.7.exe"

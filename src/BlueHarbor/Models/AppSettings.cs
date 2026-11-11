@@ -32,6 +32,15 @@ public sealed class AppSettings
     /// </summary>
     public bool AacPromptShown { get; set; }
 
+    /// <summary>
+    /// Preferred Windows render endpoint. When set, BlueHarbor restores it as
+    /// the default output at startup, because a stale default is a common
+    /// cause of "A2DP connected but no sound".
+    /// </summary>
+    public string? OutputDeviceId { get; set; }
+
+    public string? OutputDeviceName { get; set; }
+
     [JsonIgnore]
     public bool HasSavedWindowPosition =>
         WindowLeft is not null && WindowTop is not null &&
